@@ -17,6 +17,87 @@ interface AnalysisResult {
   reasoning: string;
 }
 
+function analyzeNews(articleText: string): AnalysisResult {
+  const text = articleText.toLowerCase();
+  let fakeIndicators = 0;
+  let realIndicators = 0;
+
+  const fakePatterns = [
+    /exclusive proof/i,
+    /shocking truth/i,
+    /they don't want you to know/i,
+    /wake up sheeple/i,
+    /this will blow your mind/i,
+    /unbelievable/i,
+    /miracle cure/i,
+    /conspiracy/i,
+    /fake news/i,
+    /mainstream media lies/i,
+    /urgent:/i,
+    /breaking: (fake|hoax)/i,
+    /!!!|!!!/,
+  ];
+
+  const realPatterns = [
+    /according to/i,
+    /research shows/i,
+    /study found/i,
+    /published in/i,
+    /government report/i,
+    /official statement/i,
+    /source:/i,
+    /verified/i,
+    /peer-reviewed/i,
+    /organization|agency|department/i,
+  ];
+
+  const qualityPatterns = [
+    /however|furthermore|moreover/i,
+    /analysis|investigation/i,
+    /context|background/i,
+  ];
+
+  fakePatterns.forEach(pattern => {
+    if (pattern.test(text)) fakeIndicators++;
+  });
+
+  realPatterns.forEach(pattern => {
+    if (pattern.test(text)) realIndicators++;
+  });
+
+  let qualityScore = 0;
+  qualityPatterns.forEach(pattern => {
+    if (pattern.test(text)) qualityScore++;
+  });
+
+  const words = text.split(/\s+/).length;
+  const allCaps = (text.match(/[A-Z]{4,}/g) || []).length;
+  const emotionalWords = (text.match(/amazing|terrible|horrible|disgusting|love|hate/g) || []).length;
+
+  if (allCaps > words * 0.05) fakeIndicators++;
+  if (emotionalWords > words * 0.02) fakeIndicators++;
+
+  let result: "fake" | "real" | "uncertain" = "uncertain";
+  let confidence = 0.5;
+  let reasoning = "";
+
+  if (fakeIndicators > realIndicators + 2) {
+    result = "fake";
+    confidence = Math.min(0.95, 0.6 + (fakeIndicators * 0.1));
+    reasoning = `This article shows multiple signs of misinformation including sensationalist language, lack of credible sources, and emotional manipulation tactics. The content contains ${fakeIndicators} characteristics commonly found in fake news.`;
+  } else if (realIndicators > fakeIndicators + 2) {
+    result = "real";
+    confidence = Math.min(0.95, 0.6 + (realIndicators * 0.08));
+    reasoning = `This article demonstrates several characteristics of legitimate journalism including credible sourcing, factual language, and proper context. It contains ${realIndicators} indicators of authentic news reporting.`;
+  } else {
+    result = "uncertain";
+    confidence = 0.5 + (qualityScore * 0.05);
+    reasoning = `This article's authenticity is unclear. It shows a mix of credible and questionable elements. Additional verification from authoritative sources is recommended before sharing.`;
+  }
+
+  return { result, confidence: Math.min(0.99, Math.max(0.01, confidence)), reasoning };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -43,93 +124,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const openaiApiKey = Deno.env.get("OPENAI_API_KEY");
-
-    if (!openaiApiKey) {
-      return new Response(
-        JSON.stringify({
-          error: "OpenAI API key not configured. Please add your OPENAI_API_KEY to continue.",
-        }),
-        {
-          status: 500,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-    }
-
-    const prompt = `You are an expert fact-checker and misinformation analyst. Analyze the following news article and determine if it's likely to be FAKE NEWS or REAL NEWS.
-
-Consider these factors:
-1. Emotional manipulation and sensationalism
-2. Lack of credible sources or citations
-3. Logical fallacies and inconsistencies
-4. Inflammatory language designed to provoke
-5. Verifiable facts vs unsubstantiated claims
-6. Writing quality and journalistic standards
-7. Context and plausibility
-
-Article to analyze:
-"""
-${articleText}
-"""
-
-Respond in JSON format with:
-{
-  "result": "fake" | "real" | "uncertain",
-  "confidence": 0.0-1.0,
-  "reasoning": "detailed explanation of your analysis"
-}`;
-
-    const openaiResponse = await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openaiApiKey}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: "You are an expert at detecting fake news and misinformation. Always respond with valid JSON.",
-            },
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-          temperature: 0.3,
-          response_format: { type: "json_object" },
-        }),
-      }
-    );
-
-    if (!openaiResponse.ok) {
-      const error = await openaiResponse.text();
-      console.error("OpenAI API error:", error);
-      return new Response(
-        JSON.stringify({
-          error: "Failed to analyze article. Please try again.",
-        }),
-        {
-          status: 500,
-          headers: {
-            ...corsHeaders,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-    }
-
-    const openaiData = await openaiResponse.json();
-    const analysisResult: AnalysisResult = JSON.parse(
-      openaiData.choices[0].message.content
-    );
+    const analysisResult = analyzeNews(articleText);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_ANON_KEY")!;
